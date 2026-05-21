@@ -1,0 +1,30 @@
+services:
+  factufacil-bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Persiste el índice FAISS entre reinicios del contenedor
+      - faiss_data:/app/data/faiss_index
+    networks:
+      - default
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      # Routing — dominio del bot
+      - "traefik.http.routers.landingbot.rule=Host(`landingbot.qhipa.org.pe`)"
+      - "traefik.http.routers.landingbot.entrypoints=websecure"
+      # TLS — Let's Encrypt automático
+      - "traefik.http.routers.landingbot.tls=true"
+      - "traefik.http.routers.landingbot.tls.certresolver=letsencrypt"
+      # Puerto interno donde corre FastAPI
+      - "traefik.http.services.landingbot.loadbalancer.server.port=8000"
+
+volumes:
+  faiss_data:
+
+networks:
+  default: {}
+  traefik-public:
+    external: true

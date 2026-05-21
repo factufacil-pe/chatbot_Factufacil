@@ -1,0 +1,11 @@
+__pycache__
+*.pyc
+*.pyo
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+data/faiss_index/
+*.md
+.git/
