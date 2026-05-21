@@ -1,6 +1,6 @@
 services:
   factufacil-bot:
-    build: .
+    image: ${IMAGE}
     restart: unless-stopped
     env_file: .env
     volumes:

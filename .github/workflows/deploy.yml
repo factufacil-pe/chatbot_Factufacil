@@ -1,0 +1,89 @@
+name: Deploy to Pro7Tiendas
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+jobs:
+  deploy:
+    name: Build, push & deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        env:
+          IMAGE: ghcr.io/miguel-anay/factufacil-chatbot:${{ github.sha }}
+        run: |
+          docker build -t $IMAGE .
+          docker push $IMAGE
+          docker tag $IMAGE ghcr.io/miguel-anay/factufacil-chatbot:latest
+          docker push ghcr.io/miguel-anay/factufacil-chatbot:latest
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Deploy via SSM
+        env:
+          INSTANCE_ID: i-06ed766af4b831cf0
+          IMAGE: ghcr.io/miguel-anay/factufacil-chatbot:${{ github.sha }}
+        run: |
+          COMPOSE_B64=$(base64 -w 0 docker-compose.yml)
+
+          DEPLOY_SCRIPT=$(cat << SCRIPT | base64 -w 0
+          #!/bin/bash
+          set -e
+          DEPLOY_DIR=/opt/factufacil-chatbot
+          mkdir -p \$DEPLOY_DIR
+
+          GHCR_TOKEN=\$(aws ssm get-parameter --name /factufacil/chatbot/ghcr_token --with-decryption --query Parameter.Value --output text --region us-east-1)
+          echo "\$GHCR_TOKEN" | docker login ghcr.io -u miguel-anay --password-stdin
+
+          docker pull $IMAGE
+
+          ALIBABA_API_KEY=\$(aws ssm get-parameter --name /factufacil/chatbot/alibaba_api_key --with-decryption --query Parameter.Value --output text --region us-east-1)
+          printf 'ALIBABA_API_KEY=%s\nALIBABA_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1\nLLM_MODEL=qwen-plus\n' "\$ALIBABA_API_KEY" > \$DEPLOY_DIR/.env
+
+          echo "$COMPOSE_B64" | base64 -d > \$DEPLOY_DIR/docker-compose.yml
+
+          IMAGE=$IMAGE docker compose -f \$DEPLOY_DIR/docker-compose.yml up -d
+          SCRIPT
+          )
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters "commands=[\"echo $DEPLOY_SCRIPT | base64 -d | bash\"]" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "SSM Command ID: $COMMAND_ID"
+
+          aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID"
+
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query '{Status:Status,Output:StandardOutputContent,Errors:StandardErrorContent}'
