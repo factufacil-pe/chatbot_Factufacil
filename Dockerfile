@@ -4,6 +4,8 @@ WORKDIR /app
 
 # Instalar dependencias primero (capa cacheada)
 COPY requirements.txt .
+# CPU-only torch to avoid 2GB CUDA variant pulled by sentence-transformers
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar código fuente
