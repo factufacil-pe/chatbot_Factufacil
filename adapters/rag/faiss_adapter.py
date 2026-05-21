@@ -57,7 +57,7 @@ class FAISSAdapter(RAGPort):
 
     def _load_or_build(self) -> None:
         index_path = Path(Config.FAISS_INDEX_PATH)
-        if index_path.exists():
+        if (index_path / "index.faiss").exists():
             self._store = FAISS.load_local(
                 str(index_path),
                 self._embeddings,
