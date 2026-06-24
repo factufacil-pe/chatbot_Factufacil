@@ -66,20 +66,56 @@ class SuppliersPort(ABC):  async def search(self, query) -> list[Supplier]: ...
 class SalesPort(ABC):
     async def create_sale_note(self, draft) -> SaleNote: ...
     async def generate_cpe(self, sale_note_id) -> Cpe: ...        # interrupt
-class PurchasesPort(ABC):  async def create_purchase(self, draft) -> Purchase: ...  # interrupt
+class PurchasesPort(ABC):
+    # item_snapshots: REQUIRED, one dict per line item (description/
+    # internal_id/unit_type_id/item_code/... subset). Real source read
+    # (PurchaseController::store(), Phase 2 follow-up) showed
+    # `$doc->items()->create($row)` is called directly off the caller's
+    # payload — no server Transform/Input fills `purchase_items.item`
+    # (NOT-NULL json column). Corrects the original signature, which only
+    # had `draft: dict` per the incomplete openapi.yaml.
+    async def create_purchase(self, draft, *, item_snapshots: list[dict]) -> Purchase: ...  # interrupt
 class DispatchPort(ABC):
     async def get_tables(self) -> DispatchTables: ...
-    async def create_dispatch(self, draft) -> Dispatch: ...
+    # establishment_fiscal_code/origin_location_id/delivery_location_id:
+    # REQUIRED, additive. Real source read (DispatchTransform.php +
+    # DispatchValidation.php + DispatchInput.php, Phase 2 follow-up) showed
+    # the API Transform layer needs `datos_del_emisor.
+    # codigo_del_domicilio_fiscal` (an Establishment.code, e.g. "0000") and
+    # BOTH origin/delivery need a 6-digit ubigeo `location_id` — none of
+    # this is in openapi.yaml. Corrects the original signature, which only
+    # had `draft: dict`.
+    async def create_dispatch(
+        self, draft, *, establishment_fiscal_code: str,
+        origin_location_id: str, delivery_location_id: str,
+    ) -> Dispatch: ...
     async def send_dispatch(self, id) -> Dispatch: ...            # interrupt
     async def list_dispatches(self, **f) -> list[Dispatch]: ...
 class FinancePort(ABC):
-    async def create_retention(self, d) -> Retention: ...         # interrupt
-    async def create_perception(self, d) -> Perception: ...       # interrupt
+    # establishment_fiscal_code/supplier_identity: REQUIRED, additive.
+    # Real source read (RetentionTransform.php + RetentionValidation.php,
+    # Phase 2 follow-up) showed retentions need BOTH datos_del_emisor (same
+    # shape as Dispatch above) AND datos_del_proveedor (PersonTransform:
+    # codigo_tipo_documento_identidad/numero_documento/
+    # apellidos_y_nombres_o_razon_social required, codigo_pais also
+    # effectively required — persons.country_id is NOT NULL).
+    async def create_retention(
+        self, d, *, establishment_fiscal_code: str, supplier_identity: dict,
+    ) -> Retention: ...         # interrupt
+    # customer_identity: REQUIRED, additive. IMPORTANT CORRECTION: real
+    # source read of PerceptionTransform.php (the `establishment` line is
+    # COMMENTED OUT) + PerceptionValidation.php (hardcodes establishment_id
+    # from the authenticated user) confirmed perceptions do NOT need
+    # datos_del_emisor at all, unlike retentions/dispatches — only
+    # datos_del_cliente_o_receptor (same PersonTransform shape, customer).
+    async def create_perception(self, d, *, customer_identity: dict) -> Perception: ...  # interrupt
     async def open_cash(self, d) -> Cash: ...                     # interrupt
     async def close_cash(self, cash_id) -> Cash: ...              # interrupt
     async def get_daily_report(self, **f) -> Report: ...
     async def get_general_sale_report(self, d) -> Report: ...
 ```
+
+**Why these signatures changed (Phase 2 follow-up round, PR 3 same branch)**: the original signatures above were designed purely from `openapi.yaml`, which the Phase 2 implementation pass discovered is incomplete for 4 of the 8 adapters — several real Laravel-side required fields (nested issuer/person data, ubigeo codes, item snapshots) are validated deep in controller/Transform/Input classes and never documented in the spec at all. A live-sandbox-first approach surfaced 500-class errors instead of clean 422s, masking the true cause. A direct read of the FacturadorPro7 Laravel source (`app/CoreFacturalo/Requests/Api/Transform/*`, `Requests/Inputs/*`, `Requests/Api/Validation/*`) was required to find the exact required shape. These params are additive/keyword-only — no caller of `create_dispatch`/`create_retention` existed yet outside Phase 2's own verification scripts, so this is not a breaking change to any shipped tool/agent code (Phase 3+ not yet built).
 
 `AgentState` (TypedDict): `messages` (`add_messages`), `context_module`, `active_specialist`, `session_id`, `pending_confirmation`, `handoff_reason`. Credentials NEVER in state.
 
@@ -103,8 +139,12 @@ Purely additive. Rollback = remove `include_router` in `main.py`; new folders de
 
 ## Open Questions
 
-- [ ] qwen-plus tool-calling + async `interrupt()` unproven — smoke-test gate; model swap (qwen-max/gpt-4o-mini) is config-only.
-- [ ] `/api/retentions`, `/api/perceptions` schemas undocumented (empty `type: object`) — inspect controller or force 422 in sandbox before fixing tool schema.
-- [ ] `/api/dispatches` required fields thin — `extra: dict` escape until verified via `GET /api/dispatches/tables`.
-- [ ] `/api/cash/open` no `required` listed — treat balance/date/time as required, confirm in sandbox.
+- [x] qwen-plus tool-calling + async `interrupt()` — RESOLVED in Phase 0: passed both checks first try, no model swap needed.
+- [x] `/api/perceptions` schema — RESOLVED in Phase 2 follow-up via direct source read: `PerceptionTransform.php`'s `establishment` line is commented out and `PerceptionValidation.php` hardcodes `establishment_id` from the authenticated user. Perceptions need ONLY `datos_del_cliente_o_receptor` (customer identity, `codigo_pais` required too — `persons.country_id` is NOT NULL). `FinancePort.create_perception()` signature updated with `customer_identity: dict`. NOT live-verified end-to-end (no test attempt made — retention's analogous attempt revealed a `documentos` requirement deep in XML generation that likely applies here too; deferred to Phase 3, see below).
+- [ ] `/api/retentions` schema — PARTIALLY RESOLVED in Phase 2 follow-up via direct source read: requires BOTH `datos_del_emisor` (`{"codigo_del_domicilio_fiscal": "<Establishment.code>"}`, e.g. `"0000"` for this tenant) AND `datos_del_proveedor` (PersonTransform shape, `codigo_pais` also required). `FinancePort.create_retention()` signature updated with `establishment_fiscal_code`/`supplier_identity`. Live-verified to get PAST the original gap (a real attempt with both fixes applied progressed through `Functions::establishment()`/`Functions::person()` resolution). GENUINELY UNRESOLVED (time-boxed): a minimal `totales`-only body with no `documentos` (the underlying purchase invoices being retained against) hits `UpstreamError: Invalid argument supplied for foreach()` deep inside `Facturalo->save()`/XML generation — not reached via source read in this pass (both `RetentionTransform::document()` and `RetentionInput::document()` guard their foreach with `key_exists`, so the unguarded one is further downstream). Phase 3 tool design for `crear_retencion` must treat `documentos` as effectively required, resolved from a real `Purchase` record.
+- [ ] `/api/dispatches` required fields — PARTIALLY RESOLVED in Phase 2 follow-up via direct source read: requires `datos_del_emisor` (same shape as retentions) PLUS a 6-digit ubigeo `location_id` nested in BOTH `direccion_partida` (origin) and `direccion_llegada` (delivery), PLUS the Transform layer's Spanish field names (`serie_documento`/`numero_documento`, not `series`/`number`). `DispatchPort.create_dispatch()` signature updated with `establishment_fiscal_code`/`origin_location_id`/`delivery_location_id`. Live-verified to get PAST the original gap and series validation. GENUINELY UNRESOLVED (time-boxed): BOTH transport modes additionally require an undocumented nested person object — `transport_mode_type_id="02"` (privado) needs a full `driver` object (`DispatchInput::getDriverId()`), `transport_mode_type_id="01"` (público) needs a full `dispatcher`/transportista object (`DispatchInput::getDispatcherId()`) — confirmed live for both. No transport mode skips this requirement. Phase 3 tool design for `crear_guia_remision` must resolve dispatcher OR driver+vehicle data before calling the adapter.
+- [x] `/api/cash/open` required fields — RESOLVED in Phase 2 via real 422 against sandbox: only `beginning_balance` is actually required. `date_opening`/`time_opening` are NOT required server-side (contradicts the original assumption). Also discovered: `/api/cash/close/{cash}` is a GET route in the real spec/app, not POST as design.md originally assumed.
 - [ ] Stock transfer between warehouses (`/api/transfers/*`) not in spec — deferred, NOT built; `register_transaction` covers simple in/out only.
+- [ ] NEW (Phase 2 discovery): `register_transaction`'s `inventory_transaction_id` is a tenant-configured foreign key (e.g. id=10/11 = valid "ingreso" types on the sandbox tenant) with NO listing endpoint anywhere in openapi.yaml. The tools/agents layer (Phase 3+) cannot safely hardcode these IDs across tenants — needs either a documented lookup endpoint or per-tenant configuration resolved at runtime before `registrar_movimiento_stock` ships.
+- [x] `create_purchase()` NOT-NULL `purchase_items.item` gap — RESOLVED and LIVE-VERIFIED in Phase 2 follow-up: real source read of `PurchaseController::store()`/migration confirmed the gap; `PurchasesPort.create_purchase()` signature updated with required `item_snapshots: list[dict]`. A real end-to-end create succeeded (purchase id=122 on the sandbox, marked test data) after ALSO discovering the `purchase_a4` PDF template (called outside the DB transaction, after commit) reads `item.is_set` — the adapter now defaults `is_set: False` on every injected snapshot.
+- [ ] `create_sale_note()` NOT-NULL gaps — PARTIALLY RESOLVED, GENUINELY UNRESOLVED SERVER BUG (time-boxed) in Phase 2 follow-up: real source read of `SaleNoteController::mergeData()`/`getDataSeries()` confirmed `prefix` is never populated; live attempts then found and fixed TWO MORE in the same class (`time_of_issue`, `exchange_rate_sale`) — all now defaulted in `sales_adapter.py`. After fixing all three, a FOURTH NOT-NULL violation appeared on `total`, a COMPUTED AGGREGATE (sum of line-item totals/taxes), not a simple scalar default — this suggests `mergeData()` assumes a richer web-UI flow that pre-computes all total/tax columns client-side, which the bare API endpoint never does server-side. Stopped here per time-box; Phase 3 tool design for `crear_preliminar_venta` should compute and send the full total/tax breakdown explicitly rather than relying on server-side computation.
