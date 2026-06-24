@@ -39,11 +39,11 @@ Each unit above is independently mergeable, has a clear verification step (smoke
 
 ## Phase 1: Domain + Ports + HTTP Foundation
 
-- [ ] 1.1 Add ERP entities to `core/domain.py` (additive): `Item`, `ItemDraft`, `Category`, `Brand`, `StockTxn`, `StockMovement`, `Customer`, `Supplier`, `SaleNote`, `Cpe`, `Purchase`, `Dispatch`, `DispatchTables`, `Retention`, `Perception`, `Cash`, `Report`
-- [ ] 1.2 Add 8 async port ABCs to `core/ports.py` (additive): `ItemsPort`, `InventoryPort`, `CustomersPort`, `SuppliersPort`, `SalesPort`, `PurchasesPort`, `DispatchPort`, `FinancePort` — per interfaces in design.md
-- [ ] 1.3 Create `adapters/facturadorpro7_api/auth.py` with `TenantCredentials(base_url, token)` dataclass
-- [ ] 1.4 Create `adapters/facturadorpro7_api/http_client.py` with `FacturadorPro7Client(creds)` — per-request instantiation, never global/singleton, Bearer auth, no token logging
-- [ ] 1.5 Manual smoke test: instantiate `FacturadorPro7Client` against `desa.facturadorpro7.test` with a real dev token, confirm a basic authenticated GET succeeds
+- [x] 1.1 Add ERP entities to `core/domain.py` (additive): `Item`, `ItemDraft`, `Category`, `Brand`, `StockTxn`, `StockMovement`, `Customer`, `Supplier`, `SaleNote`, `Cpe`, `Purchase`, `Dispatch`, `DispatchTables`, `Retention`, `Perception`, `Cash`, `Report` — verified via `scripts/verify_phase1_domain_ports.py` (55/55 checks passed)
+- [x] 1.2 Add 8 async port ABCs to `core/ports.py` (additive): `ItemsPort`, `InventoryPort`, `CustomersPort`, `SuppliersPort`, `SalesPort`, `PurchasesPort`, `DispatchPort`, `FinancePort` — per interfaces in design.md; verified ABC enforcement + async coroutine signatures via same script
+- [x] 1.3 Create `adapters/facturadorpro7_api/auth.py` with `TenantCredentials(base_url, token)` frozen dataclass
+- [x] 1.4 Create `adapters/facturadorpro7_api/http_client.py` with `FacturadorPro7Client(creds)` — per-request instantiation (verified two instances are independent objects), Bearer auth, 401→`AuthError`/422→`ValidationError`/5xx→`UpstreamError` mapping, no token in exception strings — verified via `scripts/verify_phase1_http_client.py` (15/15 checks passed, httpx.MockTransport, includes 500 vs 503 triangulation)
+- [x] 1.5 Manual smoke test: instantiated `FacturadorPro7Client` against the REAL sandbox tenant `https://yiwu.qhipa.org.pe` ("YIWU IMPORT CORPORATION E.I.R.L.") with a real Bearer token, `GET /api/items/records?per_page=3` succeeded — returned real product data (e.g. `{'id': 704, 'description': '*ZHKTZ035/36 MACETERO X 3 HELLO KITTY MORADO CAJA X 8 SET46581574'}`). Script: `scripts/smoke_test_http_client_live.py` (credentials read from an external file, never hardcoded/logged/committed)
 
 ## Phase 2: Adapters (one at a time, against dev tenant)
 
