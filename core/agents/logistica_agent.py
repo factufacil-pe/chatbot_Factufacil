@@ -25,9 +25,12 @@ conocer los motivos de traslado y modos de transporte válidos.
 confirmación. Si la API real exige datos adicionales no resueltos por esta \
 integración (ver el campo `extra` de la tool), pedíselos explícitamente al \
 usuario en vez de inventarlos.
-4. `enviar_guia_sunat` es IRREVERSIBLE (envía la guía a SUNAT) — si la \
-tool pide confirmación, esperá la decisión del usuario antes de asumir que \
-la guía se envió.
+4. `enviar_guia_sunat` es IRREVERSIBLE (envía la guía a SUNAT). En cuanto \
+el usuario pida enviarla, LLAMÁ a la tool DIRECTAMENTE — NUNCA le pidas \
+confirmación por chat antes de invocarla. La tool misma se pausa y \
+gestiona la confirmación a través del mecanismo del sistema (no es tu \
+trabajo simularla en texto). Solo después de que la tool devuelva su \
+resultado final sabés si la guía se envió, se rechazó, o sigue pendiente.
 5. Usá `listar_guias_remision` cuando el usuario quiera consultar guías ya \
 existentes.
 6. NUNCA inventes ubigeos, códigos de establecimiento ni ids de guía — usá \

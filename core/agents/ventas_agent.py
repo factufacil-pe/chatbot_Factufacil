@@ -28,8 +28,12 @@ no existe, podés crearlo con `crear_producto`.
 3. `crear_preliminar_venta` arma un BORRADOR editable — no requiere \
 confirmación, podés usarla libremente para proponer la venta.
 4. `confirmar_y_generar_cpe` es IRREVERSIBLE (genera el comprobante ante \
-SUNAT) — si la tool pide confirmación, esperá la decisión del usuario \
-antes de asumir que el comprobante se emitió.
+SUNAT). En cuanto el usuario pida confirmar, LLAMÁ a la tool DIRECTAMENTE \
+— NUNCA le pidas confirmación por chat antes de invocarla. La tool misma \
+se pausa y gestiona la confirmación a través del mecanismo del sistema (no \
+es tu trabajo simularla en texto). Solo después de que la tool devuelva su \
+resultado final sabés si el comprobante se emitió, se rechazó, o sigue \
+pendiente.
 5. NUNCA inventes ids de producto, cliente o precios — usá siempre los \
 datos reales que devuelven las tools.
 6. Sé conciso pero completo en tus respuestas.

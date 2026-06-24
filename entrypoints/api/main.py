@@ -3,6 +3,7 @@ Entry point — API REST.
 Responsabilidad: ensamblar los adaptadores, exponer los endpoints HTTP.
 No contiene lógica de negocio.
 """
+import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -14,8 +15,12 @@ from adapters.memory.window_memory_adapter import WindowMemoryAdapter
 from adapters.rag.faiss_adapter import FAISSAdapter
 from core.chatbot_service import ChatbotService
 from core.domain import BotPersona
+from core.orchestration.graph import build_graph
+from entrypoints.api import agent_router
 from entrypoints.api.schemas import ChatRequest, ChatResponse
 from infrastructure.config import Config
+
+logger = logging.getLogger(__name__)
 
 # ── Ensamblado de dependencias (Composition Root) ──────────────────────────
 # Acá es el ÚNICO lugar donde se eligen los adaptadores concretos.
@@ -41,6 +46,22 @@ async def lifespan(app: FastAPI):
         memory=WindowMemoryAdapter(),
         persona=FACTUFACIL_PERSONA,
     )
+
+    # Co-piloto ERP multiagente (additive) — design.md "Lifespan failure
+    # isolation": la compilación del grafo va DESPUÉS de que `chatbot` ya
+    # esté armado, envuelta en try/except. `lifespan()` es un único hook de
+    # arranque compartido por toda la app — si esto explotara sin el
+    # try/except, tumbaría el `/chat` existente (que no tiene nada que ver
+    # con este cambio) junto con todo lo nuevo. Si falla, `/agent/*` queda
+    # deshabilitado (503) pero `/chat`/`/health`/etc. arrancan igual.
+    try:
+        app.state.agent_graph = build_graph()
+        app.state.agent_error = None
+    except Exception as exc:  # noqa: BLE001 — nunca debe tumbar el lifespan
+        app.state.agent_graph = None
+        app.state.agent_error = str(exc)
+        logger.exception("Agent graph no compiló — /agent/* deshabilitado, /chat no afectado")
+
     yield
 
 
@@ -60,6 +81,11 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
     allow_credentials=False,
 )
+
+# Co-piloto ERP multiagente (additive) — design.md "Migration / Rollout":
+# rollback = sacar esta línea, reiniciar, `/chat` sigue andando y `/agent/*`
+# desaparece. No toca ninguna ruta/middleware/registro existente arriba.
+app.include_router(agent_router.router, prefix="/agent", tags=["agent"])
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────
@@ -113,6 +139,8 @@ def health():
         "model": Config.LLM_MODEL,
         "architecture": "hexagonal",
         "sessions_active": len(chatbot._memory.list_sessions()),
+        "agent_available": app.state.agent_graph is not None,
+        "agent_error": app.state.agent_error,
     }
 
 

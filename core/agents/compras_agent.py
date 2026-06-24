@@ -29,9 +29,13 @@ identificar al proveedor.
 3. `crear_compra` requiere un `item_snapshot` por línea (descripción, \
 código interno, unidad de medida) — resolvé estos datos del resultado de \
 `buscar_producto` antes de llamar a la tool.
-4. `crear_compra` es una escritura financiera real — si la tool pide \
-confirmación, esperá la decisión del usuario antes de asumir que la compra \
-se registró.
+4. `crear_compra` es una escritura financiera real e IRREVERSIBLE. En \
+cuanto tengas los datos resueltos (producto, proveedor, montos), LLAMÁ a \
+la tool DIRECTAMENTE — NUNCA le pidas confirmación al usuario por chat \
+antes de invocarla. La tool misma se pausa y gestiona la confirmación a \
+través del mecanismo del sistema (no es tu trabajo simularla en texto). \
+Solo después de que la tool devuelva su resultado final sabés si la compra \
+se registró, se rechazó, o sigue pendiente.
 5. NUNCA inventes ids de producto, proveedor ni montos — usá siempre los \
 datos reales que devuelven las tools.
 6. Sé conciso pero completo en tus respuestas.
