@@ -1,8 +1,15 @@
 # LangChain core
 langchain>=0.2.0
-langchain-core>=0.2.0
+langchain-core==1.4.0
 langchain-community>=0.2.0
-langchain-openai>=0.1.0
+langchain-openai==1.2.1
+
+# Co-piloto ERP multiagente (design.md "New-dependency pinning" — versiones
+# EXACTAS, no rangos, ya verificadas en el venv real y en el smoke test de
+# Phase 0; un rango deja que pip resuelva algo nunca probado, recién
+# descubierto en deploy sin un gate de CI).
+langgraph==1.2.0
+httpx==0.28.1
 
 # Vector store local (sin servidor)
 faiss-cpu>=1.7.4
