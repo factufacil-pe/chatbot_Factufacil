@@ -249,12 +249,13 @@ async def _check_decline_cycle_live(client: httpx.AsyncClient):
             "/agent/chat",
             json={
                 "message": (
-                    "Quiero registrar una compra al proveedor id=1, documento tipo "
-                    "01 serie F001 numero 000123, fecha 2026-06-24, con 1 unidad del "
-                    "producto 'PRODUCTO DE PRUEBA INTEGRACION' a precio 10.00, "
-                    "internal_id TEST-INT-1, unidad NIU. No busques productos ni "
-                    "proveedores reales, usá item_id=1 directamente y ejecutá "
-                    "crear_compra de una con esos datos — es solo una prueba de flujo."
+                    "Quiero registrar una compra de prueba. Primero buscá el "
+                    "producto cuya descripción contiene 'TEST-AGENTE-IA-VERIFICACION' "
+                    "(ya existe en el catálogo) y buscá el proveedor 'ABHER S.A.C.' "
+                    "(ya existe). Con los IDs reales que encuentres, armá la compra: "
+                    "documento tipo 01, serie F001, numero 000123, fecha 2026-06-24, "
+                    "1 unidad a precio 10.00. No inventes IDs — usá los que te "
+                    "devuelvan buscar_producto y buscar_proveedor."
                 ),
                 "session_id": session_id,
                 "context_module": "compras",

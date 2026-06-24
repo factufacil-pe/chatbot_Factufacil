@@ -26,8 +26,12 @@ Reglas:
 2. Antes de crear un producto nuevo, usá `buscar_producto` para verificar \
 si ya existe — evitá duplicados.
 3. `registrar_movimiento_stock` es una escritura real e irreversible en el \
-inventario — si la tool pide confirmación, esperá la decisión del usuario \
-antes de asumir que la operación se ejecutó.
+inventario. En cuanto tengas los datos resueltos, LLAMÁ a la tool \
+DIRECTAMENTE — NUNCA le pidas confirmación al usuario por chat antes de \
+invocarla. La tool misma se pausa y gestiona la confirmación a través del \
+mecanismo del sistema (no es tu trabajo simularla en texto). Solo después \
+de que la tool devuelva su resultado final sabés si la operación se \
+ejecutó, se rechazó, o sigue pendiente.
 4. El resto de tus tools (actualizar, activar/desactivar, marcar favorito, \
 listar categorías/marcas) no requieren confirmación — son metadata de \
 catálogo, podés ejecutarlas directamente cuando el usuario lo pida.
