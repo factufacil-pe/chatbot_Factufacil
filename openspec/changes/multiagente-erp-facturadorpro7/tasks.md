@@ -84,12 +84,14 @@ Total Phase 3: 213/213 checks passed across 8 verify scripts (run with `PYTHONPA
 
 ## Phase 4: Specialist Agents (build order: Inventario → Ventas → Compras → Logística → Contabilidad)
 
-- [ ] 4.1 `core/agents/base.py`: `SpecialistAgent` — system prompt assembly + `bind_tools` + bounded loop
-- [ ] 4.2 `core/agents/inventario_agent.py` — wires `inventory_tools` + `items_tools` subset
-- [ ] 4.3 `core/agents/ventas_agent.py` — wires `sales_tools`, `customers_tools`, `items_tools`
-- [ ] 4.4 `core/agents/compras_agent.py` — wires `purchases_tools`, `suppliers_tools`, `items_tools` (proves shared `ItemsPort` across two agents)
-- [ ] 4.5 `core/agents/logistica_agent.py` — wires `dispatch_tools`
-- [ ] 4.6 `core/agents/contabilidad_agent.py` — wires `finance_tools`
+- [x] 4.1 `core/agents/base.py`: `SpecialistAgent` — system prompt assembly + `bind_tools` + bounded loop (`DEFAULT_MAX_ITERATIONS=6`). Reuses the exact `ChatOpenAI` construction already proven in Phase 0's spike (`build_llm_client()`, same Qwen/DashScope config as `OpenAICompatibleAdapter`) — no new credentials/config. Chose `.bind_tools()` + manual bounded loop over `create_react_agent` prebuilt per ground-truth plan's explicit description of `base.py` ("arma system prompt + bind_tools, loop acotado"); `interrupt()` placement inside tool bodies (Phase 3) works identically under either choice, so no functionality lost.
+- [x] 4.2 `core/agents/inventario_agent.py` — wires `inventory_tools` (7) + `items_tools` (2) = 9 tools — verified via `scripts/verify_phase4_inventario_agent.py` (9/9 checks, including 1 live qwen-plus call confirming `obtener_producto` tool_call with mocked adapter)
+- [x] 4.3 `core/agents/ventas_agent.py` — wires `sales_tools` (2), `customers_tools` (1), `items_tools` (2) = 5 tools — verified via `scripts/verify_phase4_ventas_agent.py` (9/9 checks, including 1 live qwen-plus call confirming `buscar_producto` tool_call with mocked adapter)
+- [x] 4.4 `core/agents/compras_agent.py` — wires `purchases_tools` (1), `suppliers_tools` (1), `items_tools` (2) = 4 tools (proves shared `ItemsPort` across two agents, Ventas+Compras) — verified via `scripts/verify_phase4_compras_agent.py` (9/9 checks, including 1 live qwen-plus call confirming `buscar_proveedor` tool_call with mocked adapter)
+- [x] 4.5 `core/agents/logistica_agent.py` — wires `dispatch_tools` (4) — verified via `scripts/verify_phase4_logistica_agent.py` (9/9 checks, including 1 live qwen-plus call confirming `obtener_tablas_despacho` tool_call with mocked adapter)
+- [x] 4.6 `core/agents/contabilidad_agent.py` — wires `finance_tools` (6) — verified via `scripts/verify_phase4_contabilidad_agent.py` (9/9 checks, including 1 live qwen-plus call confirming `reporte_del_dia` tool_call with mocked adapter)
+
+Total Phase 4: 45/45 checks passed across 5 verify scripts (run with `PYTHONPATH=. venv/bin/python3 scripts/verify_phase4_*.py`). Each script confirms: exact tool-name set match (no extra/missing tools), system prompt mentions the agent's domain and is in Spanish, and one live LLM call (real qwen-plus credentials, mocked adapter execution — does NOT hit the live FacturadorPro7 sandbox) proving the agent actually decides to invoke its expected tool. Regression: `python test_chatbot.py` 14/14 passed after all 5 agent files added (server booted via uvicorn, PYTHONPATH=.).
 
 ## Phase 5: Orchestration
 
