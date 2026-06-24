@@ -1,11 +1,12 @@
 """
 RED -> GREEN -> TRIANGULATE for adapters/facturadorpro7_api/finance_adapter.py.
 
-create_retention()/create_perception() are mocked here ONLY (the real
-required schema is partially undiscovered per the module docstring's OPEN
-RISK note — pass-through behavior is verified, not the full real payload).
-open_cash()/close_cash()/get_daily_report()/get_general_sale_report() are
-verified both via mock here AND live in verify_phase2_finance_live.py.
+create_retention()/create_perception() now build the REAL nested
+datos_del_emisor/datos_del_proveedor/datos_del_cliente_o_receptor shapes
+(source-code-confirmed in Phase 2 follow-up, see finance_adapter.py module
+docstring). open_cash()/close_cash()/get_daily_report()/
+get_general_sale_report() are verified both via mock here AND live in
+verify_phase2_finance_live.py.
 
 Run: PYTHONPATH=. venv/bin/python3 scripts/verify_phase2_finance_adapter.py
 """
@@ -45,7 +46,7 @@ def check_is_finance_port():
     check("FinanceAdapter implements FinancePort (ABC)", isinstance(adapter, FinancePort))
 
 
-def check_create_retention_passes_through_and_parses_amount():
+def check_create_retention_builds_datos_del_emisor_and_proveedor():
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -54,21 +55,53 @@ def check_create_retention_passes_through_and_parses_amount():
         return httpx.Response(200, json={"success": True, "data": {"id": 1}})
 
     adapter = make_adapter(handler)
-    d = {"totales": {"total": 150.0}, "datos_del_emisor": {}}
-    result = asyncio.run(adapter.create_retention(d))
+    d = {"totales": {"total": 150.0}}
+    supplier_identity = {
+        "codigo_tipo_documento_identidad": "6",
+        "numero_documento": "20545418135",
+        "apellidos_y_nombres_o_razon_social": "ABHER S.A.C.",
+    }
+    result = asyncio.run(adapter.create_retention(
+        d, establishment_fiscal_code="0000", supplier_identity=supplier_identity,
+    ))
     check("create_retention() calls POST /api/retentions", seen["path"] == "/api/retentions")
-    check("create_retention() passes the caller's dict through verbatim", seen["body"] == d)
+    check("create_retention() still sends the caller's original dict fields (totales)", seen["body"]["totales"] == d["totales"])
     check("create_retention() returns Retention with real amount parsed from totales", isinstance(result, Retention) and result.amount == 150.0)
+    # Phase 2 follow-up: real source-code-confirmed nested requirements.
+    check(
+        "create_retention() builds datos_del_emisor.codigo_del_domicilio_fiscal",
+        seen["body"]["datos_del_emisor"]["codigo_del_domicilio_fiscal"] == "0000",
+    )
+    check(
+        "create_retention() builds datos_del_proveedor from supplier_identity",
+        seen["body"]["datos_del_proveedor"] == supplier_identity,
+    )
 
 
-def check_create_perception_different_amount_triangulation():
-    """Triangulation: a different amount/dict -> different real output."""
+def check_create_perception_builds_datos_del_cliente_no_emisor_needed():
+    """Real discovery: PerceptionTransform.php's establishment line is
+    commented out and PerceptionValidation.php hardcodes establishment_id
+    from the authenticated user — perceptions do NOT need datos_del_emisor,
+    correcting the prior pass's "same gap as dispatches" assumption."""
+    seen = {}
+
     def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = _json.loads(request.content)
         return httpx.Response(200, json={"success": True, "data": {"id": 2}})
 
     adapter = make_adapter(handler)
-    result = asyncio.run(adapter.create_perception({"totales": {"total": 88.5}}))
+    customer_identity = {
+        "codigo_tipo_documento_identidad": "6",
+        "numero_documento": "20123456789",
+        "apellidos_y_nombres_o_razon_social": "CLIENTE TEST S.A.C.",
+    }
+    result = asyncio.run(adapter.create_perception({"totales": {"total": 88.5}}, customer_identity=customer_identity))
     check("create_perception() with a different amount returns a DIFFERENT real value", isinstance(result, Perception) and result.amount == 88.5)
+    check(
+        "create_perception() builds datos_del_cliente_o_receptor from customer_identity",
+        seen["body"]["datos_del_cliente_o_receptor"] == customer_identity,
+    )
+    check("create_perception() does NOT need datos_del_emisor at all", "datos_del_emisor" not in seen["body"])
 
 
 def check_open_cash_fills_beginning_balance_default_and_merges():
@@ -142,8 +175,8 @@ def check_get_general_sale_report_caller_period_overrides():
 
 def main():
     check_is_finance_port()
-    check_create_retention_passes_through_and_parses_amount()
-    check_create_perception_different_amount_triangulation()
+    check_create_retention_builds_datos_del_emisor_and_proveedor()
+    check_create_perception_builds_datos_del_cliente_no_emisor_needed()
     check_open_cash_fills_beginning_balance_default_and_merges()
     check_close_cash_calls_get_not_post()
     check_get_daily_report_parses_real_shape()

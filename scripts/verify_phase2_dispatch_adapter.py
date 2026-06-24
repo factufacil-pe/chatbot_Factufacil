@@ -69,12 +69,31 @@ def check_create_dispatch_posts_delivery_and_origin():
 
     adapter = make_adapter(handler)
     draft = {"delivery": {"address": "Av. Entrega 123"}, "origin": {"address": "Av. Origen 456"}}
-    result = asyncio.run(adapter.create_dispatch(draft))
+    result = asyncio.run(adapter.create_dispatch(
+        draft,
+        establishment_fiscal_code="0000",
+        origin_location_id="150101",
+        delivery_location_id="150101",
+    ))
     check("create_dispatch() calls POST /api/dispatches", seen["path"] == "/api/dispatches")
     check("create_dispatch() sends required delivery.address", seen["body"]["delivery"]["address"] == "Av. Entrega 123")
     check("create_dispatch() sends required origin.address", seen["body"]["origin"]["address"] == "Av. Origen 456")
     check("create_dispatch() returns a real Dispatch entity with addresses", isinstance(result, Dispatch) and result.delivery_address == "Av. Entrega 123")
     check("create_dispatch() carries real external_id in extra", result.extra["external_id"] == "uuid-disp-1")
+    # Phase 2 follow-up: undocumented datos_del_emisor + ubigeo requirements
+    # discovered via direct read of DispatchTransform.php/DispatchInput.php.
+    check(
+        "create_dispatch() sends datos_del_emisor.codigo_del_domicilio_fiscal",
+        seen["body"]["datos_del_emisor"]["codigo_del_domicilio_fiscal"] == "0000",
+    )
+    check(
+        "create_dispatch() sends direccion_partida with ubigeo",
+        seen["body"]["direccion_partida"]["ubigeo"] == "150101",
+    )
+    check(
+        "create_dispatch() sends direccion_llegada with ubigeo",
+        seen["body"]["direccion_llegada"]["ubigeo"] == "150101",
+    )
 
 
 def check_create_dispatch_with_extra_fields_triangulation():
@@ -90,9 +109,18 @@ def check_create_dispatch_with_extra_fields_triangulation():
         "delivery": {"address": "X"}, "origin": {"address": "Y"},
         "transfer_reason_type_id": "01", "transport_mode_type_id": "02",
     }
-    asyncio.run(adapter.create_dispatch(draft))
+    asyncio.run(adapter.create_dispatch(
+        draft,
+        establishment_fiscal_code="0000",
+        origin_location_id="150101",
+        delivery_location_id="150103",
+    ))
     check("create_dispatch() passes through extra fields verbatim (transfer_reason_type_id)",
           seen["body"].get("transfer_reason_type_id") == "01")
+    check(
+        "create_dispatch() lets per-call delivery/origin location_id differ",
+        seen["body"]["direccion_llegada"]["ubigeo"] == "150103",
+    )
 
 
 def check_list_dispatches_parses_real_paginated_shape():

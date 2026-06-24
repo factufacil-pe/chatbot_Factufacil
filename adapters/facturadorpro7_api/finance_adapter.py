@@ -10,20 +10,51 @@ Endpoints reales (openapi.yaml):
   GET  /api/report              -> get_daily_report()
   POST /api/reports/general-sale -> get_general_sale_report()
 
-OPEN RISK (documented, not silently guessed): /api/retentions and
-/api/perceptions both require a nested "datos_del_emisor" issuer-data
-structure that is COMPLETELY ABSENT from openapi.yaml (the spec declares
-an empty `type: object` requestBody for both). Live discovery against the
-sandbox tenant (real 500 errors, not 422s — validation is never reached)
-confirmed the existence of this requirement and traced it through TWO
-nested transform classes server-side (RetentionTransform.php ->
-EstablishmentTransform.php -> "datos_del_proveedor" still undiscovered
-beyond that point) before this verification pass was time-boxed to avoid
-excessive trial-and-error POSTs against a shared tenant. create_retention()
-and create_perception() below pass the caller's dict straight through
-(matching the port's Dict[str, Any] signature) so a future pass — or a
-direct read of RetentionTransform.php/PerceptionTransform.php in the
-Laravel app — can supply the full nested shape without an adapter change.
+OPEN RISK RESOLVED (Phase 2 follow-up, real source-code read — the prior
+Phase-2 pass only confirmed SOME nested structure was required via live
+500s; this pass traced the exact shape and found retentions and perceptions
+are NOT identical, correcting the prior assumption):
+
+- create_retention(): RetentionTransform::transform()
+  (app/CoreFacturalo/Requests/Api/Transform/RetentionTransform.php:23-24)
+  requires BOTH `datos_del_emisor` (-> EstablishmentTransform.php:10, a bare
+  `{"code": "<Establishment.code>"}`) AND `datos_del_proveedor` (->
+  Common/PersonTransform.php:12-21 — `codigo_tipo_documento_identidad`/
+  `numero_documento`/`apellidos_y_nombres_o_razon_social` required,
+  `ubigeo`/`direccion`/`correo_electronico`/`telefono` optional).
+  RetentionValidation::validation() (Api/Validation/RetentionValidation.php:
+  9-15) resolves both server-side via Functions::establishment()/
+  Functions::person() — confirmed via direct source read, not guessed.
+- create_perception(): PerceptionTransform::transform()
+  (PerceptionTransform.php:23, the `establishment` line is COMMENTED OUT in
+  the real source) and PerceptionValidation::validation()
+  (PerceptionValidation.php:9, hardcodes `auth()->user()->establishment_id`
+  server-side) BOTH confirm perceptions do NOT need `datos_del_emisor` at
+  all — only `datos_del_cliente_o_receptor` (same PersonTransform shape,
+  customer not supplier). Sending `datos_del_emisor` for a perception is
+  harmless (ignored) but unnecessary.
+
+OPEN RISK PARTIALLY RESOLVED for create_retention() (one additional real
+attempt, per the dispatch fix's same root cause): like dispatch's customer
+identity, datos_del_proveedor ALSO needs codigo_pais explicitly
+(persons.country_id is NOT NULL, Functions::valueKeyInArray() defaults
+missing keys to null) -- callers must build supplier_identity with
+codigo_pais set (e.g. "PE").
+GENUINELY UNRESOLVED (time-boxed, NOT chased further): with a minimal
+totales-only retention body and no documentos (referenced underlying
+purchase invoices being retained against), a real attempt hit
+UpstreamError: Invalid argument supplied for foreach() deep inside
+document/XML generation (Facturalo->save(), not reached via source read in
+this pass -- both RetentionTransform::document() and RetentionInput::
+document() guard their foreach with key_exists()/array_key_exists(), so the
+unguarded foreach is further downstream). This is consistent with a
+retention being a SUNAT document that conceptually MUST reference at least
+one real purchase invoice -- Phase 3 tool design for crear_retencion should
+treat documentos (per-document RUC/series/number/totals, matching
+RetentionTransform::document()'s shape) as effectively required, not
+optional, and resolve it from an existing Purchase record before calling
+this adapter.
+
 """
 from __future__ import annotations
 
@@ -38,17 +69,27 @@ class FinanceAdapter(FinancePort):
     def __init__(self, client: FacturadorPro7Client):
         self._client = client
 
-    async def create_retention(self, d: Dict[str, Any]) -> Retention:  # interrupt (tools layer)
-        # See module docstring OPEN RISK note: the real required shape
-        # (datos_del_emisor / datos_del_proveedor / totales) is only
-        # partially discovered. Pass-through verbatim — do NOT guess
-        # additional keys here without further controller inspection.
-        result = await self._client.post("/api/retentions", json=d)
+    async def create_retention(
+        self,
+        d: Dict[str, Any],
+        *,
+        establishment_fiscal_code: str,
+        supplier_identity: Dict[str, Any],
+    ) -> Retention:  # interrupt (tools layer)
+        payload: Dict[str, Any] = {
+            **d,
+            "datos_del_emisor": {"codigo_del_domicilio_fiscal": establishment_fiscal_code},
+            "datos_del_proveedor": supplier_identity,
+        }
+        result = await self._client.post("/api/retentions", json=payload)
         raw = (result or {}).get("data") or {}
         return Retention(id=raw.get("id", 0), amount=float(d.get("totales", {}).get("total", 0) or 0), extra=raw)
 
-    async def create_perception(self, d: Dict[str, Any]) -> Perception:  # interrupt (tools layer)
-        result = await self._client.post("/api/perceptions", json=d)
+    async def create_perception(
+        self, d: Dict[str, Any], *, customer_identity: Dict[str, Any]
+    ) -> Perception:  # interrupt (tools layer)
+        payload: Dict[str, Any] = {**d, "datos_del_cliente_o_receptor": customer_identity}
+        result = await self._client.post("/api/perceptions", json=payload)
         raw = (result or {}).get("data") or {}
         return Perception(id=raw.get("id", 0), amount=float(d.get("totales", {}).get("total", 0) or 0), extra=raw)
 

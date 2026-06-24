@@ -6,6 +6,39 @@ Endpoints reales (openapi.yaml):
   POST /api/dispatches         -> create_dispatch()  (borrador, NO interrupt)
   POST /api/dispatches/send    -> send_dispatch()    (interrupt — capa de tools)
   GET  /api/dispatches/records -> list_dispatches()
+
+OPEN RISK PARTIALLY RESOLVED (Phase 2 follow-up, real source-code read of
+DispatchTransform.php/DispatchInput.php/DispatchValidation.php): the
+datos_del_emisor + origin/delivery ubigeo fix below is necessary and
+verified to get PAST the original "datos_del_emisor" gap — a real attempt
+progressed through series validation and customer-person resolution after
+two additional fixes discovered live:
+  1. The Transform layer reads Spanish API field names (`serie_documento`/
+     `numero_documento`, not `series`/`number`) — caller drafts must use
+     the `*_documento` naming, matching openapi.yaml's documented fields
+     for OTHER endpoints (sale-note's generate-cpe uses the same naming).
+  2. `datos_del_cliente_o_receptor`/`datos_del_proveedor` (PersonTransform)
+     need `codigo_pais` explicitly — Functions::valueKeyInArray() defaults
+     missing keys to `null`, and `persons.country_id` is NOT NULL.
+GENUINELY UNRESOLVED (time-boxed per instruction, NOT chased further): BOTH
+transport modes require an undocumented nested person object, not just one:
+  - `transport_mode_type_id == "02"` (transporte privado) needs
+    `DispatchInput::getDriverId()` (DispatchInput.php:462-486) -> a FULL
+    `driver` object (`identity_document_type_id`/`number`/`name`/`license`/
+    `telephone`) to firstOrCreate a `drivers` row.
+  - `transport_mode_type_id == "01"` (transporte público) needs
+    `DispatchInput::getDispatcherId()` (DispatchInput.php:410-427) -> a FULL
+    `dispatcher` (transportista) object (`identity_document_type_id`/
+    `number`/`name`/`number_mtc`) to firstOrCreate a `dispatchers` row —
+    confirmed via a real attempt with `transport_mode_type_id="01"` that
+    still 500s on `dispatchers.identity_document_type_id cannot be null`.
+Neither requirement is in openapi.yaml or surfaced as an explicit port
+parameter. No orphaned record was left in either case (confirmed live via
+GET /api/dispatches/records — the dispatcher/driver insert failure happens
+before any `dispatches` row is created). Phase 3 tool design for
+`crear_guia_remision` must resolve dispatcher OR driver+vehicle data
+(depending on the chosen transport mode) before calling this adapter — there
+is no transport mode that skips a nested person requirement.
 """
 from __future__ import annotations
 
@@ -27,17 +60,52 @@ class DispatchAdapter(DispatchPort):
         extra = {k: v for k, v in result.items() if k not in ("transferReasonTypes", "transportModeTypes")}
         return DispatchTables(transfer_reasons=transfer_reasons, transport_modes=transport_modes, extra=extra)
 
-    async def create_dispatch(self, draft: Dict[str, Any]) -> Dispatch:
-        # openapi.yaml only documents delivery.address/origin.address as
-        # required, but a real guía de remisión needs transfer reason,
-        # transport mode, items, etc. — the design's "extra: dict" escape
-        # carries any additional real fields the tool layer resolved via
-        # get_tables() first. We send delivery/origin plus everything else
-        # the caller provided, verbatim.
-        result = await self._client.post("/api/dispatches", json=draft)
+    async def create_dispatch(
+        self,
+        draft: Dict[str, Any],
+        *,
+        establishment_fiscal_code: str,
+        origin_location_id: str,
+        delivery_location_id: str,
+    ) -> Dispatch:
+        # OPEN RISK RESOLVED (Phase 2 follow-up, real source-code read of
+        # DispatchTransform.php:25 + DispatchValidation.php:12 +
+        # DispatchInput.php:158-198): the real pipeline requires
+        # `datos_del_emisor: {"codigo_del_domicilio_fiscal": <Establishment.
+        # code>}` (resolved server-side to establishment_id via
+        # Functions::establishment()) PLUS a 6-digit ubigeo `location_id`
+        # nested inside BOTH `direccion_partida` (origin) and
+        # `direccion_llegada` (delivery) — none of this is in openapi.yaml
+        # or validated by DispatchController::store() (which only checks
+        # delivery.address/origin.address), so it fails downstream in the
+        # Transform/Input layers instead of with a clean 422. We build the
+        # full required shape here; the caller's draft (delivery/origin
+        # addresses, items, transfer reason, transport mode, etc., resolved
+        # via get_tables() first) is layered underneath via the "extra: dict"
+        # escape exactly as before.
+        delivery = dict(draft.get("delivery") or {})
+        origin = dict(draft.get("origin") or {})
+        delivery.setdefault("location_id", delivery_location_id)
+        origin.setdefault("location_id", origin_location_id)
+
+        payload: Dict[str, Any] = {
+            **draft,
+            "datos_del_emisor": {"codigo_del_domicilio_fiscal": establishment_fiscal_code},
+            "direccion_partida": {
+                "ubigeo": origin.get("location_id", origin_location_id),
+                "direccion": origin.get("address", ""),
+                "codigo_del_domicilio_fiscal": establishment_fiscal_code,
+            },
+            "direccion_llegada": {
+                "ubigeo": delivery.get("location_id", delivery_location_id),
+                "direccion": delivery.get("address", ""),
+                "codigo_del_domicilio_fiscal": establishment_fiscal_code,
+            },
+            "delivery": delivery,
+            "origin": origin,
+        }
+        result = await self._client.post("/api/dispatches", json=payload)
         raw = result.get("data") or {}
-        delivery = draft.get("delivery") or {}
-        origin = draft.get("origin") or {}
         return Dispatch(
             id=raw.get("id", 0),
             origin_address=origin.get("address", ""),

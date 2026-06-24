@@ -64,6 +64,24 @@ def check_create_sale_note_posts_draft_and_parses_response():
     check("create_sale_note() sends the draft's required fields", seen["body"]["customer_id"] == 28 and seen["body"]["series_id"] == 1)
     check("create_sale_note() returns SaleNote with real id from response", isinstance(result, SaleNote) and result.id == 501)
     check("create_sale_note() carries through customer_id and items from the draft", result.customer_id == 28 and result.items == draft["items"])
+    # Phase 2 follow-up: test the "send prefix explicitly" hypothesis for the
+    # series.prefix server-side gap (source-confirmed: SaleNoteController
+    # never populates it; Series model has no prefix column at all).
+    check("create_sale_note() sends prefix explicitly by default", seen["body"].get("prefix") == "")
+
+
+def check_create_sale_note_caller_can_override_prefix():
+    """Triangulation: if the caller explicitly sets prefix, it must win."""
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"success": True, "data": {"id": 1, "number": "X-1"}})
+
+    adapter = make_adapter(handler)
+    draft = {"series_id": 1, "customer_id": 1, "date_of_issue": "2026-06-23", "items": [], "prefix": "CUSTOM"}
+    asyncio.run(adapter.create_sale_note(draft))
+    check("create_sale_note() lets caller's explicit prefix override the default", seen["body"]["prefix"] == "CUSTOM")
 
 
 def check_create_sale_note_different_draft_triangulation():
@@ -101,6 +119,7 @@ def check_generate_cpe_posts_to_correct_path_mocked_only():
 def main():
     check_is_sales_port()
     check_create_sale_note_posts_draft_and_parses_response()
+    check_create_sale_note_caller_can_override_prefix()
     check_create_sale_note_different_draft_triangulation()
     check_generate_cpe_posts_to_correct_path_mocked_only()
 

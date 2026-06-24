@@ -55,16 +55,26 @@ def check_create_purchase_posts_draft_and_parses_response():
         "date_of_issue": "2026-06-23", "supplier_id": 64,
         "items": [{"item_id": 1229, "quantity": 1}], "total": 0.01,
     }
-    result = asyncio.run(adapter.create_purchase(draft))
+    snapshots = [{"description": "TEST ITEM", "internal_id": "AUTO-1", "unit_type_id": "NIU"}]
+    result = asyncio.run(adapter.create_purchase(draft, item_snapshots=snapshots))
     check("create_purchase() calls POST /api/purchases", seen["path"] == "/api/purchases")
     check("create_purchase() sends required field supplier_id", seen["body"]["supplier_id"] == 64)
-    check("create_purchase() sends required field items", seen["body"]["items"] == draft["items"])
     check("create_purchase() returns Purchase with real id from response", isinstance(result, Purchase) and result.id == 301)
     check("create_purchase() maps the real number_full into number", result.number == "F001-301")
     # Real-tenant discoveries (500 errors against live sandbox, not guessed):
     check("create_purchase() fills default 'time_of_issue' when omitted", "time_of_issue" in seen["body"])
     check("create_purchase() fills default 'currency_type_id' when omitted", seen["body"]["currency_type_id"] == "PEN")
     check("create_purchase() fills default 'exchange_rate_sale' when omitted", seen["body"]["exchange_rate_sale"] == 1.0)
+    # Phase 2 follow-up: NOT-NULL purchase_items.item snapshot requirement.
+    check(
+        "create_purchase() injects 'item' snapshot into each line item",
+        seen["body"]["items"][0]["item"] == {"is_set": False, **snapshots[0]},
+    )
+    # Phase 2 follow-up round 2: createPdf() template reads item.is_set.
+    check(
+        "create_purchase() defaults is_set=False on the injected snapshot",
+        seen["body"]["items"][0]["item"]["is_set"] is False,
+    )
 
 
 def check_create_purchase_caller_values_override_defaults():
@@ -81,7 +91,7 @@ def check_create_purchase_caller_values_override_defaults():
         "date_of_issue": "2026-06-23", "supplier_id": 1, "items": [],
         "currency_type_id": "USD",
     }
-    asyncio.run(adapter.create_purchase(draft))
+    asyncio.run(adapter.create_purchase(draft, item_snapshots=[]))
     check("create_purchase() lets caller's explicit currency_type_id override the default", seen["body"]["currency_type_id"] == "USD")
 
 
@@ -96,8 +106,29 @@ def check_create_purchase_different_supplier_triangulation():
         "date_of_issue": "2026-06-24", "supplier_id": 10,
         "items": [], "total": 99.0,
     }
-    result = asyncio.run(adapter.create_purchase(draft))
+    result = asyncio.run(adapter.create_purchase(draft, item_snapshots=[]))
     check("create_purchase() with a different draft returns a DIFFERENT real id", result.id == 909 and result.supplier_id == 10)
+
+
+def check_create_purchase_item_already_has_snapshot_is_not_overwritten():
+    """Triangulation: caller can supply 'item' directly inline in a line item."""
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"success": True, "data": {"id": 5, "number_full": "X-5"}})
+
+    adapter = make_adapter(handler)
+    inline_item = {"item_id": 1, "quantity": 2, "item": {"description": "INLINE"}}
+    draft = {
+        "document_type_id": "01", "series": "F001", "number": "5",
+        "date_of_issue": "2026-06-23", "supplier_id": 1, "items": [inline_item],
+    }
+    asyncio.run(adapter.create_purchase(draft, item_snapshots=[]))
+    check(
+        "create_purchase() does not overwrite a caller-supplied inline 'item' snapshot",
+        seen["body"]["items"][0]["item"] == {"description": "INLINE"},
+    )
 
 
 def main():
@@ -105,6 +136,7 @@ def main():
     check_create_purchase_posts_draft_and_parses_response()
     check_create_purchase_different_supplier_triangulation()
     check_create_purchase_caller_values_override_defaults()
+    check_create_purchase_item_already_has_snapshot_is_not_overwritten()
 
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     if FAIL:
