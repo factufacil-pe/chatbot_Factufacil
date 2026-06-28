@@ -61,7 +61,7 @@ class Config:
 
     # Datos de la empresa (usados en el prompt del sistema)
     COMPANY_NAME: str = "FactuFácil"
-    COMPANY_PHONE: str = "936327402"
+    COMPANY_PHONE: str = "+51 936327402"
     COMPANY_EMAIL: str = "ventas@factufacil.pe"
     COMPANY_DEMO_URL: str = "demo.factufacil.pe"
 
