@@ -43,7 +43,7 @@ class Config:
     # Score máximo de distancia L2 (FAISS, embeddings normalizados) para
     # considerar un doc relevante. Por encima de este valor la query se
     # trata como off-topic y no se llama al LLM.
-    OFF_TOPIC_THRESHOLD: float = float(os.getenv("OFF_TOPIC_THRESHOLD", "1.0"))
+    OFF_TOPIC_THRESHOLD: float = float(os.getenv("OFF_TOPIC_THRESHOLD", "1.3"))
 
     # Servidor
     HOST: str = os.getenv("HOST", "0.0.0.0")
